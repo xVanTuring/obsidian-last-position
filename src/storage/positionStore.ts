@@ -120,12 +120,13 @@ function readVersionedState(value: unknown, now: number): PositionState | undefi
 	if (!value || typeof value !== 'object') return undefined;
 
 	const candidate = value as Partial<PositionState>;
-	if (candidate.version !== 2 || !isRecord(candidate.files) || !isRecord(candidate.leaves)) {
-		return undefined;
-	}
+	if (candidate.version !== 2) return undefined;
+	if (candidate.files !== undefined && !isRecord(candidate.files)) return undefined;
+	if (candidate.leaves !== undefined && !isRecord(candidate.leaves)) return undefined;
+	if (candidate.bookmarks !== undefined && !isRecord(candidate.bookmarks)) return undefined;
 
 	const state = emptyPositionState();
-	for (const [path, record] of Object.entries(candidate.files)) {
+	for (const [path, record] of Object.entries(candidate.files ?? {})) {
 		if (!isValidPath(path) || !isRecord(record) || !isValidHeight(record.height)) continue;
 		setOwn(state.files, path, {
 			height: record.height,
@@ -133,7 +134,7 @@ function readVersionedState(value: unknown, now: number): PositionState | undefi
 		});
 	}
 
-	for (const [leafId, record] of Object.entries(candidate.leaves)) {
+	for (const [leafId, record] of Object.entries(candidate.leaves ?? {})) {
 		if (!isValidPath(leafId)
 			|| !isRecord(record)
 			|| typeof record.filePath !== 'string'
@@ -274,6 +275,40 @@ export class PositionStore {
 
 	merge(incoming: PositionState): void {
 		this.state = mergePositionStates(this.state, incoming);
+	}
+
+	/**
+	 * 应用来自 tsv 文件的外部变化（git pull / 手工编辑后的重读）。
+	 * positions 按 lastAccessed 新者胜；bookmarks 以外部文件为权威整表替换
+	 * ——磁盘内容已是 git 的行级合并结果，直接采用不会丢本地已提交的行。
+	 */
+	applyExternalDelta(
+		positions: Record<string, ScrollPositionRecord> | undefined,
+		bookmarks: Record<string, PositionBookmark[]> | undefined,
+	): boolean {
+		let changed = false;
+		if (positions) {
+			for (const [path, record] of Object.entries(positions)) {
+				const existing = Object.prototype.hasOwnProperty.call(this.state.files, path)
+					? this.state.files[path]
+					: undefined;
+				if (existing && existing.lastAccessed > record.lastAccessed) continue;
+				if (existing
+					&& existing.lastAccessed === record.lastAccessed
+					&& existing.height === record.height) continue;
+				setOwn(this.state.files, path, { ...record });
+				changed = true;
+			}
+		}
+		if (bookmarks) {
+			const next: Record<string, PositionBookmark[]> = {};
+			for (const [path, list] of Object.entries(bookmarks)) {
+				setOwn(next, path, list.map(bookmark => ({ ...bookmark })));
+			}
+			this.state.bookmarks = next;
+			changed = true;
+		}
+		return changed;
 	}
 
 	deleteFile(filePath: string): boolean {

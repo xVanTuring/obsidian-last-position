@@ -6,6 +6,7 @@ import { PositionCoordinator } from './core/positionCoordinator';
 import { PositionStore, migratePositionState } from './storage/positionStore';
 import type { PositionState } from './domain/positionTypes';
 import { PositionPersistenceService } from './storage/positionPersistence';
+import { PositionTextRepository, type TextFileAdapter, type TextPositionState } from './storage/positionTextRepository';
 import {
 	createObsidianPositionCore,
 	ObsidianPositionCore,
@@ -26,6 +27,7 @@ export default class LastPositionPlugin extends Plugin {
 	private coordinator?: PositionCoordinator<unknown, unknown>;
 	private core?: ObsidianPositionCore;
 	private persistence?: PositionPersistenceService;
+	private textRepository?: PositionTextRepository;
 	private commandRegistry?: CommandRegistry;
 	private bookmarkCommands?: BookmarkCommandController;
 	private commonCommands?: CommonCommandController;
@@ -82,28 +84,51 @@ export default class LastPositionPlugin extends Plugin {
 			|| Object.prototype.hasOwnProperty.call(sanitizedLoadedData, 'enableDebugLogging');
 		delete sanitizedLoadedData.restoreTimeoutMs;
 		delete sanitizedLoadedData.enableDebugLogging;
-		const positionState = migratePositionState(
+		// 旧字段只作一次性迁移来源，不再进入 settings/data.json
+		const legacyScrollHeightData = sanitizedLoadedData.scrollHeightData;
+		delete sanitizedLoadedData.scrollHeightData;
+		const jsonState = migratePositionState(
 			sanitizedLoadedData.positionState,
-			sanitizedLoadedData.scrollHeightData,
+			legacyScrollHeightData,
 		);
+
+		const repository = this.getTextRepository();
+		let textState: TextPositionState | null = null;
+		let textReadFailed = false;
+		try {
+			textState = await repository.load(this.getPluginDirectory());
+		} catch (error) {
+			textReadFailed = true;
+			console.error('[Last-Position-Plugin]: Failed to read position text files; falling back to data.json.', error);
+		}
+
+		// tsv 是进度（files/bookmarks）的唯一权威来源；data.json 只提供 leaves 与迁移数据
+		const positionState: PositionState = textState
+			? {
+				version: 2,
+				files: textState.positions,
+				leaves: jsonState.leaves,
+				bookmarks: textState.bookmarks,
+			}
+			: jsonState;
 
 		this.settings = {
 			...DEFAULT_SETTINGS,
 			...sanitizedLoadedData,
 			positionState,
-			scrollHeightData: new Map(Object.entries(positionState.files)),
 		};
 		this.positionStore = new PositionStore(positionState);
 		this.persistence = new PositionPersistenceService(this.positionStore, {
+			getPluginDirectory: () => this.getPluginDirectory(),
 			getSettingsSnapshot: () => ({ ...this.settings }),
 			setPositionState: nextState => {
 				this.settings.positionState = nextState;
-				this.settings.scrollHeightData = new Map(Object.entries(nextState.files));
 			},
 			saveData: data => this.saveData(data),
-		});
+		}, repository);
 
-		if (shouldRepair || hadRemovedRestoreSettings) {
+		// textReadFailed 时不迁移：读失败不代表文件不存在，避免用 data.json 覆盖磁盘上的 tsv
+		if ((!textState && !textReadFailed) || shouldRepair || hadRemovedRestoreSettings) {
 			try {
 				await this.persistPositionState();
 			} catch (error) {
@@ -187,6 +212,10 @@ export default class LastPositionPlugin extends Plugin {
 			coordinator.handleActiveLeafChange(leaf);
 		}));
 		this.registerEvent(this.app.workspace.on('file-open', () => {
+			// 先检查 tsv 是否被 git 等操作外部修改，再执行位置恢复
+			void this.persistence?.reloadIfChanged().catch(error => {
+				console.error('[Last-Position-Plugin]: Failed to reload position text files', error);
+			});
 			coordinator.handleFileOpen(this.app.workspace.activeLeaf);
 		}));
 		this.registerEvent(this.app.workspace.on('layout-change', () => {
@@ -231,10 +260,27 @@ export default class LastPositionPlugin extends Plugin {
 		return this.persistence;
 	}
 
-	private async readSettingsData(): Promise<ParsedSettingsData> {
-		const pluginDirectory = this.manifest.dir
+	private getPluginDirectory(): string {
+		return this.manifest.dir
 			?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
-		const dataPath = `${pluginDirectory}/data.json`;
+	}
+
+	private getTextRepository(): PositionTextRepository {
+		if (!this.textRepository) {
+			const adapter = this.app.vault.adapter;
+			const fileAdapter: TextFileAdapter = {
+				read: async path => (await adapter.exists(path)) ? await adapter.read(path) : null,
+				write: (path, content) => adapter.write(path, content),
+				remove: path => adapter.remove(path),
+				rename: (from, to) => adapter.rename(from, to),
+			};
+			this.textRepository = new PositionTextRepository(fileAdapter);
+		}
+		return this.textRepository;
+	}
+
+	private async readSettingsData(): Promise<ParsedSettingsData> {
+		const dataPath = `${this.getPluginDirectory()}/data.json`;
 
 		try {
 			const parsed = parseSettingsData(await this.app.vault.adapter.read(dataPath));

@@ -1,13 +1,13 @@
 # Last Position
 
 ![Obsidian](https://img.shields.io/badge/Obsidian-%23483699?style=for-the-badge&logo=obsidian&logoColor=white)
-![GitHub release](https://img.shields.io/github/v/release/Saktawdi/obsidian-last-position?style=for-the-badge)
-![GitHub downloads](https://img.shields.io/github/downloads/Saktawdi/obsidian-last-position/total?style=for-the-badge)
-![License](https://img.shields.io/github/license/Saktawdi/obsidian-last-position?style=for-the-badge)
+![License](https://img.shields.io/github/license/xVanTuring/obsidian-last-position?style=for-the-badge)
 
 English | [中文](README.md)
 
 Last Position is an Obsidian plugin that saves and restores Markdown scroll positions per workspace leaf, keeping reading and editing continuous across files and tabs.
+
+> This repository is a fork of [Saktawdi/obsidian-last-position](https://github.com/Saktawdi/obsidian-last-position). Key change: scroll progress is stored in line-based TSV text files instead of JSON (see [Data storage](#data-storage)), which is **recommended for vaults synchronized with git** (see [Working with git sync](#working-with-git-sync)).
 
 ## Features
 
@@ -18,11 +18,22 @@ Last Position is an Obsidian plugin that saves and restores Markdown scroll posi
 - Shows the current height in the status bar; left-click saves a bookmark and right-click opens the current file's bookmark list.
 - Supports a fixed restore delay, Smart Restore Delay (Beta), a maximum attempt count, and a retry interval.
 - Provides a paginated position table, deletion, JSON import/export, and optional cleanup of expired data.
+- Stores scroll progress in line-based TSV text files that merge cleanly in git.
 - Includes Chinese and English interfaces and is available on desktop and mobile Obsidian.
 
 ## Installation
 
-### Community Plugins
+### Build from source (recommended for this fork)
+
+```bash
+git clone git@github.com:xVanTuring/obsidian-last-position.git
+cd obsidian-last-position
+npm install && npm run build
+```
+
+Copy the generated `main.js` together with `manifest.json` and `styles.css` into your vault's `.obsidian/plugins/last-position/`, reload Obsidian, and enable Last Position under “Settings → Community plugins”.
+
+### Community Plugins (upstream build, without the TSV storage changes)
 
 1. Open “Settings → Community plugins” in Obsidian.
 2. Disable Restricted mode if prompted, then select “Browse”.
@@ -30,7 +41,7 @@ Last Position is an Obsidian plugin that saves and restores Markdown scroll posi
 
 ### Manual installation from GitHub Releases
 
-1. Download `main.js`, `manifest.json`, and `styles.css` for the same version from the [Releases](https://github.com/Saktawdi/obsidian-last-position/releases) page.
+1. Download `main.js`, `manifest.json`, and `styles.css` for the same version from the [Releases](https://github.com/xVanTuring/obsidian-last-position/releases) page.
 2. Create `.obsidian/plugins/last-position/` inside your Obsidian vault.
 3. Copy the three files into that folder.
 4. Reload Obsidian and enable Last Position under “Settings → Community plugins”.
@@ -63,12 +74,37 @@ The status bar shows the current scroll height. Left-click it to save the curren
 - **Cleanup Days**: configurable from `7–365` days; defaults to `30`.
 - **Data Import/Export**: exports positions and bookmarks as JSON or merges validated compatible data into the current store.
 
+## Data storage
+
+Scroll progress is no longer written into `data.json`. It lives in two plain-text files inside the plugin folder (`.obsidian/plugins/last-position/`):
+
+- `positions.tsv`: one line per note (`path<TAB>height<TAB>lastAccessed`), sorted by path.
+- `bookmarks.tsv`: one line per bookmark (`path<TAB>name<TAB>height<TAB>createdAt`).
+- `data.json`: only UI settings and per-leaf (leafId) session data; leaf ids are meaningful on a single machine only, so they stay out of the synced files.
+
+The TSV format is one sorted record per line, designed for git: changes to different records land on different lines, so git's line-based three-way merge usually resolves them automatically. If a conflict does happen (both branches touched adjacent lines), you can keep both sides' lines — parsing is lenient: conflict-marker lines are skipped and duplicate paths resolve to the newer timestamp. External edits such as `git pull` are detected and applied the next time a file is opened.
+
+When versioning your vault with git, make sure `positions.tsv` and `bookmarks.tsv` are not excluded by `.gitignore`. The Import/Export feature keeps using JSON — that is a cross-device exchange format, unrelated to local storage.
+
+## Working with git sync
+
+This fork is recommended for vaults **versioned with git** (with the [Obsidian Git](https://github.com/denki/obsidian-git) plugin auto-committing, or manual commits — both work):
+
+1. Put the whole vault (including `.obsidian/`) under git and push it to a remote such as GitHub.
+2. Make sure `.gitignore` does **not** exclude `.obsidian/plugins/last-position/positions.tsv` and `bookmarks.tsv` — these two files are the sync payload.
+3. Install and enable this plugin on every device. Device A scrolls and saves → the change gets committed; Device B runs `git pull` → the next time a note is opened, it restores to the position read on the other device, no Obsidian restart needed.
+4. Concurrent progress edits merge automatically by line in the vast majority of cases. If adjacent records genuinely conflict, keep both sides (leaving the `<<<<<<<` marker lines in place is fine too) — the plugin resolves duplicates by newest timestamp.
+
+On mobile, the same pull works via Working Copy (iOS) or Termux/obsidian-git (Android). Only the UI settings part of `data.json` is worth cross-device syncing; its `leaves` session data syncs harmlessly but only means anything to the device that produced it.
+
+If you don't use git, this fork still works exactly like the original — progress simply lives in two plain-text files instead of `data.json`.
+
 ## Notes
 
 - Bookmarks store scroll heights. Large document edits can shift the corresponding visual position.
 - Long notes or notes with extensive asynchronous rendering may need a longer restore delay or more retry attempts.
 - `main.js` is not committed to the source repository; download it from the GitHub Release assets.
-- When reporting a problem in [GitHub Issues](https://github.com/Saktawdi/obsidian-last-position/issues), include the Obsidian version, platform, and reproduction steps.
+- When reporting a problem in [GitHub Issues](https://github.com/xVanTuring/obsidian-last-position/issues), include the Obsidian version, platform, and reproduction steps.
 
 ## License
 
