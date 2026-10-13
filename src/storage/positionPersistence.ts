@@ -6,7 +6,6 @@ import { PositionTextRepository } from './positionTextRepository';
 export interface PositionPersistenceHost {
 	getPluginDirectory(): string;
 	getSettingsSnapshot(): Record<string, unknown>;
-	setPositionState(state: PositionState): void;
 	saveData(data: Record<string, unknown>): Promise<void>;
 }
 
@@ -25,20 +24,12 @@ export class PositionPersistenceService {
 	persist(): Promise<void> {
 		return this.queue.enqueue(async () => {
 			const positionState = this.store.snapshot();
-			this.host.setPositionState(positionState);
 			await this.repository.save(this.host.getPluginDirectory(), {
 				positions: positionState.files,
 				bookmarks: positionState.bookmarks ?? {},
 			});
-			// data.json 只保留设置与 leaves；进度（files/bookmarks）已迁往 tsv，
-			// 不再写空占位（readVersionedState 对缺失分段宽容）
-			await this.host.saveData({
-				...this.host.getSettingsSnapshot(),
-				positionState: {
-					version: 2,
-					leaves: positionState.leaves,
-				},
-			});
+			// data.json 只存设置。进度在 tsv；leaves 是会话态数据，leafId 重启即失效，不再落盘
+			await this.host.saveData(this.host.getSettingsSnapshot());
 		});
 	}
 
@@ -50,8 +41,7 @@ export class PositionPersistenceService {
 		return this.queue.enqueue(async () => {
 			const delta = await this.repository.reloadIfChanged(this.host.getPluginDirectory());
 			if (!delta) return;
-			if (!this.store.applyExternalDelta(delta.positions, delta.bookmarks)) return;
-			this.host.setPositionState(this.store.snapshot());
+			this.store.applyExternalDelta(delta.positions, delta.bookmarks);
 		});
 	}
 

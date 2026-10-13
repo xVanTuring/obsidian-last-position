@@ -80,7 +80,9 @@ Scroll progress is no longer written into `data.json`. It lives in two plain-tex
 
 - `positions.tsv`: one line per note (`path<TAB>height<TAB>lastAccessed`), sorted by path.
 - `bookmarks.tsv`: one line per bookmark (`path<TAB>name<TAB>height<TAB>createdAt`).
-- `data.json`: only UI settings and per-leaf (leafId) session data; leaf ids are meaningful on a single machine only, so they stay out of the synced files.
+- `data.json`: UI settings only, still in Obsidian's native JSON format.
+
+Per-leaf (leafId) session data is no longer persisted at all: leaf ids are regenerated on every restart, so storing them would just accumulate dead rows in git. It lives in memory only, and after a restart every pane falls back to the file-level progress in `positions.tsv`.
 
 The TSV format is one sorted record per line, designed for git: changes to different records land on different lines, so git's line-based three-way merge usually resolves them automatically. If a conflict does happen (both branches touched adjacent lines), you can keep both sides' lines — parsing is lenient: conflict-marker lines are skipped and duplicate paths resolve to the newer timestamp. External edits such as `git pull` are detected and applied the next time a file is opened.
 
@@ -95,7 +97,7 @@ This fork is recommended for vaults **versioned with git** (with the [Obsidian G
 3. Install and enable this plugin on every device. Device A scrolls and saves → the change gets committed; Device B runs `git pull` → the next time a note is opened, it restores to the position read on the other device, no Obsidian restart needed.
 4. Concurrent progress edits merge automatically by line in the vast majority of cases. If adjacent records genuinely conflict, keep both sides (leaving the `<<<<<<<` marker lines in place is fine too) — the plugin resolves duplicates by newest timestamp.
 
-On mobile, the same pull works via Working Copy (iOS) or Termux/obsidian-git (Android). Only the UI settings part of `data.json` is worth cross-device syncing; its `leaves` session data syncs harmlessly but only means anything to the device that produced it.
+On mobile, the same pull works via Working Copy (iOS) or Termux/obsidian-git (Android). `data.json` now holds nothing but UI settings, so whether to sync it across devices is entirely your call.
 
 If you don't use git, this fork still works exactly like the original — progress simply lives in two plain-text files instead of `data.json`.
 

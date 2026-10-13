@@ -86,11 +86,13 @@ export default class LastPositionPlugin extends Plugin {
 		delete sanitizedLoadedData.enableDebugLogging;
 		// 旧字段只作一次性迁移来源，不再进入 settings/data.json
 		const legacyScrollHeightData = sanitizedLoadedData.scrollHeightData;
+		const legacyPositionState = sanitizedLoadedData.positionState;
+		// 进度已迁往 tsv、leaves 不再落盘：只要 data.json 里还留着这两个字段，
+		// 就触发一次重写，把 data.json 收敛成纯设置
+		const hadLegacyPositionFields = legacyScrollHeightData !== undefined || legacyPositionState !== undefined;
 		delete sanitizedLoadedData.scrollHeightData;
-		const jsonState = migratePositionState(
-			sanitizedLoadedData.positionState,
-			legacyScrollHeightData,
-		);
+		delete sanitizedLoadedData.positionState;
+		const jsonState = migratePositionState(legacyPositionState, legacyScrollHeightData);
 
 		const repository = this.getTextRepository();
 		let textState: TextPositionState | null = null;
@@ -102,7 +104,8 @@ export default class LastPositionPlugin extends Plugin {
 			console.error('[Last-Position-Plugin]: Failed to read position text files; falling back to data.json.', error);
 		}
 
-		// tsv 是进度（files/bookmarks）的唯一权威来源；data.json 只提供 leaves 与迁移数据
+		// tsv 是进度（files/bookmarks）的唯一权威来源；data.json 只提供设置与旧版迁移数据。
+		// leaves 只在本次会话内存里生效（leafId 跨重启不稳定），因此不再写回 data.json
 		const positionState: PositionState = textState
 			? {
 				version: 2,
@@ -115,20 +118,16 @@ export default class LastPositionPlugin extends Plugin {
 		this.settings = {
 			...DEFAULT_SETTINGS,
 			...sanitizedLoadedData,
-			positionState,
 		};
 		this.positionStore = new PositionStore(positionState);
 		this.persistence = new PositionPersistenceService(this.positionStore, {
 			getPluginDirectory: () => this.getPluginDirectory(),
 			getSettingsSnapshot: () => ({ ...this.settings }),
-			setPositionState: nextState => {
-				this.settings.positionState = nextState;
-			},
 			saveData: data => this.saveData(data),
 		}, repository);
 
 		// textReadFailed 时不迁移：读失败不代表文件不存在，避免用 data.json 覆盖磁盘上的 tsv
-		if ((!textState && !textReadFailed) || shouldRepair || hadRemovedRestoreSettings) {
+		if ((!textState && !textReadFailed) || shouldRepair || hadRemovedRestoreSettings || hadLegacyPositionFields) {
 			try {
 				await this.persistPositionState();
 			} catch (error) {
